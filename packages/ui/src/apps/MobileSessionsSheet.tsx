@@ -60,6 +60,7 @@ import { MobileSurfaceShell } from './MobileSurfaceShell';
 type MobileSessionsSheetProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  dragOffsetX?: number | null;
 };
 
 type ProjectMeta = {
@@ -497,7 +498,7 @@ const SortableProjectRow: React.FC<{
   );
 };
 
-export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, onOpenChange }) => {
+export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, onOpenChange, dragOffsetX = null }) => {
   const { t } = useI18n();
   const { git } = useRuntimeAPIs();
   const liveSessions = useAllLiveSessions();
@@ -1001,6 +1002,8 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       ariaLabel={t('mobile.sessions.sheet.title')}
       title={t('mobile.sessions.sheet.title')}
       trailing={trailingActions}
+      presentation="left-drawer"
+      dragOffsetX={dragOffsetX}
     >
       <div className="flex h-full flex-col">
         <div className={cn('shrink-0 px-4 pb-2 pt-1', editingOrder && 'hidden')}>

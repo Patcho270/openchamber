@@ -208,6 +208,7 @@ const MobileHeader: React.FC<{
 const MobileShell: React.FC = () => {
   const { t } = useI18n();
   const [sessionsSheetOpen, setSessionsSheetOpen] = React.useState(false);
+  const [sessionsSheetDragX, setSessionsSheetDragX] = React.useState<number | null>(null);
   const [filesOpen, setFilesOpen] = React.useState(false);
   const [changesOpen, setChangesOpen] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
@@ -234,6 +235,87 @@ const MobileShell: React.FC = () => {
     setChangesOpen(false);
     setPendingChangesDiff(null);
   }, []);
+
+  React.useEffect(() => {
+    if (filesOpen || changesOpen || settingsOpen || overflowOpen) return;
+
+    const edgeThreshold = window.innerWidth * 0.85;
+    const minSwipeDistance = 56;
+    const horizontalIntentRatio = 1.25;
+    const touchStart = { x: 0, y: 0, active: false, dragging: false };
+
+    const handleTouchStart = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      if (!touch || touch.clientX > edgeThreshold) {
+        touchStart.active = false;
+        return;
+      }
+
+      touchStart.x = touch.clientX;
+      touchStart.y = touch.clientY;
+      touchStart.active = true;
+      touchStart.dragging = false;
+    };
+
+    const handleTouchMove = (event: TouchEvent) => {
+      if (!touchStart.active) return;
+      const touch = event.touches[0];
+      if (!touch) return;
+
+      const deltaX = touch.clientX - touchStart.x;
+      const deltaY = touch.clientY - touchStart.y;
+      const hasHorizontalIntent = deltaX > 10 && Math.abs(deltaX) > Math.abs(deltaY) * horizontalIntentRatio;
+
+      if (!touchStart.dragging) {
+        if (!hasHorizontalIntent) return;
+        touchStart.dragging = true;
+        setSessionsSheetOpen(true);
+      }
+
+      event.preventDefault();
+      setSessionsSheetDragX(Math.min(0, -window.innerWidth + Math.max(0, deltaX)));
+    };
+
+    const finishSwipe = (event?: TouchEvent) => {
+      if (!touchStart.active) return;
+      const wasDragging = touchStart.dragging;
+      touchStart.active = false;
+      touchStart.dragging = false;
+
+      const touch = event?.changedTouches[0];
+      if (!touch || !wasDragging) {
+        setSessionsSheetDragX(null);
+        return;
+      }
+
+      const deltaX = touch.clientX - touchStart.x;
+      const deltaY = touch.clientY - touchStart.y;
+      const shouldOpen = deltaX >= minSwipeDistance && Math.abs(deltaX) > Math.abs(deltaY) * horizontalIntentRatio;
+
+      if (shouldOpen) {
+        setSessionsSheetDragX(null);
+      } else {
+        setSessionsSheetOpen(false);
+        setSessionsSheetDragX(null);
+      }
+    };
+
+    const handleTouchCancel = () => {
+      finishSwipe();
+    };
+
+    document.addEventListener('touchstart', handleTouchStart, { passive: true, capture: true });
+    document.addEventListener('touchmove', handleTouchMove, { passive: false, capture: true });
+    document.addEventListener('touchend', finishSwipe, { passive: true, capture: true });
+    document.addEventListener('touchcancel', handleTouchCancel, { passive: true, capture: true });
+
+    return () => {
+      document.removeEventListener('touchstart', handleTouchStart, { capture: true });
+      document.removeEventListener('touchmove', handleTouchMove, { capture: true });
+      document.removeEventListener('touchend', finishSwipe, { capture: true });
+      document.removeEventListener('touchcancel', handleTouchCancel, { capture: true });
+    };
+  }, [changesOpen, filesOpen, overflowOpen, settingsOpen]);
 
   const overflowItems: OverflowItem[] = React.useMemo(
     () => [
@@ -283,7 +365,14 @@ const MobileShell: React.FC = () => {
         />
 
         {sessionsSheetOpen ? (
-          <MobileSessionsSheet open={sessionsSheetOpen} onOpenChange={setSessionsSheetOpen} />
+          <MobileSessionsSheet
+            open={sessionsSheetOpen}
+            onOpenChange={(open) => {
+              setSessionsSheetOpen(open);
+              if (!open) setSessionsSheetDragX(null);
+            }}
+            dragOffsetX={sessionsSheetDragX}
+          />
         ) : null}
 
         {/* Mounted only while open (like the sessions sheet) so each surface

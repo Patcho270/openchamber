@@ -77,6 +77,7 @@ export const MainLayout: React.FC = () => {
     }, []);
     const mobileRightDrawerOpenRef = React.useRef(false);
     const initialDrawerWidthRef = React.useRef(typeof window === 'undefined' ? 0 : window.innerWidth);
+    const leftSwipeStartRef = React.useRef<{ x: number; y: number; dragging: boolean } | null>(null);
 
     // Left drawer motion value
     const leftDrawerX = useMotionValue(-initialDrawerWidthRef.current);
@@ -153,6 +154,84 @@ export const MainLayout: React.FC = () => {
             setMobileSessionPanelOpen(false);
         }
     }, [isSessionSwitcherOpen, isMobile, mobileLeftDrawerOpen, setMobileSessionPanelOpen]);
+
+    useEffect(() => {
+        if (!isMobile || mobileLeftDrawerOpen || mobileRightSidebarOpen || isSettingsDialogOpen) {
+            leftSwipeStartRef.current = null;
+            return;
+        }
+
+        const minSwipeDistance = 56;
+        const horizontalIntentRatio = 1.25;
+
+        const handleTouchStart = (event: TouchEvent) => {
+            const touch = event.touches[0];
+            if (!touch || touch.clientX > window.innerWidth * 0.85) {
+                leftSwipeStartRef.current = null;
+                return;
+            }
+
+            leftSwipeStartRef.current = { x: touch.clientX, y: touch.clientY, dragging: false };
+        };
+
+        const handleTouchMove = (event: TouchEvent) => {
+            const start = leftSwipeStartRef.current;
+            const touch = event.touches[0];
+            if (!start || !touch) return;
+
+            const deltaX = touch.clientX - start.x;
+            const deltaY = touch.clientY - start.y;
+            const hasHorizontalIntent = deltaX > 10 && Math.abs(deltaX) > Math.abs(deltaY) * horizontalIntentRatio;
+
+            if (!start.dragging) {
+                if (!hasHorizontalIntent) return;
+                start.dragging = true;
+                setMobileLeftDrawerVisible(true);
+            }
+
+            event.preventDefault();
+            const width = leftDrawerWidth.current || window.innerWidth;
+            leftDrawerX.set(Math.min(0, -width + Math.max(0, deltaX)));
+        };
+
+        const finishSwipe = (event?: TouchEvent) => {
+            const start = leftSwipeStartRef.current;
+            if (!start) return;
+            leftSwipeStartRef.current = null;
+
+            const touch = event?.changedTouches[0];
+            const deltaX = touch ? touch.clientX - start.x : 0;
+            const width = leftDrawerWidth.current || window.innerWidth;
+            const currentX = leftDrawerX.get();
+            const progress = 1 + currentX / width;
+            const shouldOpen = start.dragging && (deltaX >= minSwipeDistance || progress > 0.28);
+
+            animate(leftDrawerX, shouldOpen ? 0 : -width, {
+                type: 'spring',
+                stiffness: 400,
+                damping: 35,
+                mass: 0.8,
+            });
+
+            if (shouldOpen) {
+                setMobileSessionPanelOpen(true);
+            } else {
+                setMobileLeftDrawerVisible(false);
+            }
+        };
+
+        document.addEventListener('touchstart', handleTouchStart, { passive: true, capture: true });
+        document.addEventListener('touchmove', handleTouchMove, { passive: false, capture: true });
+        document.addEventListener('touchend', finishSwipe, { passive: true, capture: true });
+        document.addEventListener('touchcancel', finishSwipe, { passive: true, capture: true });
+
+        return () => {
+            document.removeEventListener('touchstart', handleTouchStart, { capture: true });
+            document.removeEventListener('touchmove', handleTouchMove, { capture: true });
+            document.removeEventListener('touchend', finishSwipe, { capture: true });
+            document.removeEventListener('touchcancel', finishSwipe, { capture: true });
+        };
+    }, [isMobile, isSettingsDialogOpen, leftDrawerWidth, leftDrawerX, mobileLeftDrawerOpen, mobileRightSidebarOpen, setMobileSessionPanelOpen]);
 
     useEffect(() => {
         if (!isMobile) {
