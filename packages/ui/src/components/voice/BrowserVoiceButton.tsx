@@ -371,22 +371,6 @@ export function BrowserVoiceButton() {
                 </Tooltip>
             </TooltipProvider>
 
-            {/* Conversation mode toggle button */}
-            {(status === 'idle' || status === 'error') && (
-                <Button
-                    size="icon"
-                    variant="ghost"
-                    onPointerDownCapture={(event) => event.stopPropagation()}
-                    onClick={handleToggleConversationMode}
-                    aria-label={conversationMode ? 'Continuous mode on' : 'Continuous mode off'}
-                    title={conversationMode ? 'Continuous mode on' : 'Continuous mode off'}
-                    className={
-                        `${buttonSizeClass} p-0 ${clearHoverBackgroundClass} ${conversationMode ? 'text-[var(--status-info)] hover:text-[var(--status-info)]' : 'text-muted-foreground hover:text-foreground'}`
-                    }
-                >
-                    <Icon name="voice-recognition" className={continuousIconSizeClass} />
-                </Button>
-            )}
         </div>
     );
 }

@@ -508,18 +508,6 @@ export const VoiceSettings: React.FC = () => {
 
                 <section className="px-2 pb-2 pt-0 space-y-0">
 
-                    <div
-                        className="group flex cursor-pointer items-center gap-2 py-1.5"
-                        role="button"
-                        tabIndex={0}
-                        aria-pressed={voiceModeEnabled}
-                        onClick={() => setVoiceModeEnabled(!voiceModeEnabled)}
-                        onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); setVoiceModeEnabled(!voiceModeEnabled); } }}
-                    >
-                        <Checkbox checked={voiceModeEnabled} onChange={setVoiceModeEnabled} ariaLabel={t('settings.voice.page.field.enableVoiceModeAria')} />
-                        <span className="typography-ui-label text-foreground">{t('settings.voice.page.field.enableVoiceMode')}</span>
-                    </div>
-
                     {voiceModeEnabled && (
                         <>
                             <div className="pb-1.5 pt-0.5">
