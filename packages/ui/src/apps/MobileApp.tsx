@@ -348,8 +348,22 @@ const MobileShell: React.FC = () => {
     setPendingChangesDiff(null);
   }, []);
 
+  const isInsideHorizontalScroller = (target: EventTarget | null): boolean => {
+    let el = target as HTMLElement | null;
+    while (el && el !== document.body) {
+      const style = window.getComputedStyle(el);
+      const overflowX = style.overflowX;
+      if ((overflowX === 'auto' || overflowX === 'scroll') && el.scrollWidth > el.clientWidth + 1) {
+        return true;
+      }
+      el = el.parentElement;
+    }
+    return false;
+  };
+
   const handleChatCardTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
     if (!sessionsSheetOpen) return;
+    if (isInsideHorizontalScroller(event.target)) return;
     const touch = event.touches[0];
     if (!touch) return;
     sessionsCloseSwipeRef.current = { x: touch.clientX, y: touch.clientY, active: true, dragging: false };
@@ -414,11 +428,28 @@ const MobileShell: React.FC = () => {
     const horizontalIntentRatio = 1.25;
     const touchStart = { x: 0, y: 0, active: false, dragging: false };
 
+    const isInsideHorizontalScroller = (target: EventTarget | null): boolean => {
+      let el = target as HTMLElement | null;
+      while (el && el !== document.body) {
+        const style = window.getComputedStyle(el);
+        const overflowX = style.overflowX;
+        if ((overflowX === 'auto' || overflowX === 'scroll') && el.scrollWidth > el.clientWidth + 1) {
+          return true;
+        }
+        el = el.parentElement;
+      }
+      return false;
+    };
+
     const handleTouchStart = (event: TouchEvent) => {
       const touch = event.touches[0];
       if (!touch || touch.clientX <= ANDROID_BACK_MARGIN || touch.clientX > edgeThreshold || sessionsSheetOpenRef.current) {
         touchStart.active = false;
-  
+        return;
+      }
+
+      if (isInsideHorizontalScroller(event.target)) {
+        touchStart.active = false;
         return;
       }
 
