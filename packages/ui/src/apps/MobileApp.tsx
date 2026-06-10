@@ -213,11 +213,123 @@ const MobileShell: React.FC = () => {
   const [changesOpen, setChangesOpen] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [overflowOpen, setOverflowOpen] = React.useState(false);
+  const sessionsCloseSwipeRef = React.useRef({ x: 0, y: 0, active: false, dragging: false });
+  const [isTransitioning, setIsTransitioning] = React.useState(false);
+  const isTransitioningRef = React.useRef(false);
+  const transitionTimerRef = React.useRef<number | null>(null);
+  const edgeTouchRef = React.useRef({ active: false, decided: false });
+  const sessionsSheetOpenRef = React.useRef(false);
+  const savedScrollRef = React.useRef(0);
+  const edgeScrollDecideRef = React.useRef<(deltaY: number, deltaX: number) => void>(() => {});
+
+  React.useEffect(() => {
+    sessionsSheetOpenRef.current = sessionsSheetOpen;
+  }, [sessionsSheetOpen]);
+
+  React.useEffect(() => {
+    const ANDROID_BACK_MARGIN = 20;
+
+    const onTouchStart = (e: TouchEvent) => {
+      const touch = e.touches[0];
+      if (!touch) return;
+      if (touch.clientX <= ANDROID_BACK_MARGIN) {
+        edgeTouchRef.current = { active: false, decided: false };
+        return;
+      }
+      if (touch.clientX <= window.innerWidth * 0.15) {
+        edgeTouchRef.current = { active: true, decided: false };
+      }
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (!edgeTouchRef.current.active || edgeTouchRef.current.decided) return;
+      e.preventDefault();
+    };
+
+    const onTouchEnd = () => {
+      edgeTouchRef.current = { active: false, decided: false };
+    };
+
+    const decideScroll = (deltaY: number, deltaX: number) => {
+      if (!edgeTouchRef.current.active || edgeTouchRef.current.decided) return;
+      if (Math.abs(deltaY) > 10 && Math.abs(deltaY) > Math.abs(deltaX)) {
+        edgeTouchRef.current.decided = true;
+      }
+    };
+
+    document.addEventListener('touchstart', onTouchStart, { passive: true, capture: true });
+    document.addEventListener('touchmove', onTouchMove, { passive: false, capture: true });
+    document.addEventListener('touchend', onTouchEnd, { passive: true, capture: true });
+    document.addEventListener('touchcancel', onTouchEnd, { passive: true, capture: true });
+
+    edgeScrollDecideRef.current = decideScroll;
+
+    return () => {
+      document.removeEventListener('touchstart', onTouchStart, { capture: true });
+      document.removeEventListener('touchmove', onTouchMove, { capture: true });
+      document.removeEventListener('touchend', onTouchEnd, { capture: true });
+      document.removeEventListener('touchcancel', onTouchEnd, { capture: true });
+    };
+  }, []);
+
+  const lockScroll = React.useCallback(() => {
+    savedScrollRef.current = window.scrollY;
+    document.body.style.position = 'fixed';
+    document.body.style.top = `-${savedScrollRef.current}px`;
+    document.body.style.width = '100%';
+    document.body.style.overflow = 'hidden';
+  }, []);
+
+  const unlockScroll = React.useCallback(() => {
+    document.body.style.position = '';
+    document.body.style.top = '';
+    document.body.style.width = '';
+    document.body.style.overflow = '';
+    window.scrollTo(0, savedScrollRef.current);
+  }, []);
+
+  const beginTransition = React.useCallback(() => {
+    if (transitionTimerRef.current) {
+      window.clearTimeout(transitionTimerRef.current);
+      transitionTimerRef.current = null;
+    }
+    isTransitioningRef.current = true;
+    setIsTransitioning(true);
+    lockScroll();
+  }, [lockScroll]);
+
+  const endTransition = React.useCallback(() => {
+    if (transitionTimerRef.current) window.clearTimeout(transitionTimerRef.current);
+    transitionTimerRef.current = window.setTimeout(() => {
+      isTransitioningRef.current = false;
+      setIsTransitioning(false);
+      unlockScroll();
+      transitionTimerRef.current = null;
+    }, 250);
+  }, [unlockScroll]);
+
+  React.useEffect(() => {
+    return () => {
+      if (transitionTimerRef.current) window.clearTimeout(transitionTimerRef.current);
+      isTransitioningRef.current = false;
+      unlockScroll();
+    };
+  }, [unlockScroll]);
+
   // When set, the Changes surface opens directly into the per-file diff for this path.
   const [pendingChangesDiff, setPendingChangesDiff] = React.useState<{ path: string; staged: boolean } | null>(null);
   const currentDirectory = useDirectoryStore((state) => state.currentDirectory);
   const gitStatus = useGitStatus(normalizePath(currentDirectory) || null);
   const dirtyChangeCount = gitStatus?.files?.length ?? 0;
+  const sessionsDrawerWidth = typeof window === 'undefined' ? 390 : window.innerWidth;
+  const sessionsDrawerProgress = sessionsSheetOpen
+    ? sessionsSheetDragX === null
+      ? 1
+      : Math.max(0, Math.min(1, 1 + sessionsSheetDragX / sessionsDrawerWidth))
+    : 0;
+  const chatCardProgress = sessionsDrawerProgress;
+  const chatCardOffset = typeof window === 'undefined' ? 390 : window.innerWidth;
+  const sessionsPanelOffset = 0;
 
   const mobileActions = React.useMemo<MobileAppActions>(
     () => ({
@@ -236,9 +348,67 @@ const MobileShell: React.FC = () => {
     setPendingChangesDiff(null);
   }, []);
 
+  const handleChatCardTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (!sessionsSheetOpen) return;
+    const touch = event.touches[0];
+    if (!touch) return;
+    sessionsCloseSwipeRef.current = { x: touch.clientX, y: touch.clientY, active: true, dragging: false };
+  };
+
+  const handleChatCardTouchMove = (event: React.TouchEvent<HTMLDivElement>) => {
+    const swipe = sessionsCloseSwipeRef.current;
+    if (!sessionsSheetOpen || !swipe.active) return;
+    const touch = event.touches[0];
+    if (!touch) return;
+
+    const deltaX = touch.clientX - swipe.x;
+    const deltaY = touch.clientY - swipe.y;
+    const hasHorizontalIntent = deltaX < -10 && Math.abs(deltaX) > Math.abs(deltaY) * 1.25;
+
+    if (edgeTouchRef.current.active && !edgeTouchRef.current.decided) {
+      edgeScrollDecideRef.current(deltaY, deltaX);
+    }
+
+    if (!swipe.dragging) {
+      if (!hasHorizontalIntent) return;
+      swipe.dragging = true;
+      beginTransition();
+
+    }
+
+    event.preventDefault();
+    setSessionsSheetDragX(Math.max(-sessionsDrawerWidth, Math.min(0, deltaX)));
+  };
+
+  const handleChatCardTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
+    const swipe = sessionsCloseSwipeRef.current;
+    sessionsCloseSwipeRef.current = { x: 0, y: 0, active: false, dragging: false };
+    if (!sessionsSheetOpen || !swipe.active) return;
+
+    const touch = event.changedTouches[0];
+    if (!touch || !swipe.dragging) {
+      setSessionsSheetDragX(null);
+
+      endTransition();
+      return;
+    }
+
+    const deltaX = touch.clientX - swipe.x;
+    const deltaY = touch.clientY - swipe.y;
+    const shouldClose = deltaX <= -56 && Math.abs(deltaX) > Math.abs(deltaY) * 1.25;
+
+    if (shouldClose) {
+      setSessionsSheetOpen(false);
+    }
+    setSessionsSheetDragX(null);
+
+    endTransition();
+  };
+
   React.useEffect(() => {
     if (filesOpen || changesOpen || settingsOpen || overflowOpen) return;
 
+    const ANDROID_BACK_MARGIN = 20;
     const edgeThreshold = window.innerWidth * 0.85;
     const minSwipeDistance = 56;
     const horizontalIntentRatio = 1.25;
@@ -246,8 +416,9 @@ const MobileShell: React.FC = () => {
 
     const handleTouchStart = (event: TouchEvent) => {
       const touch = event.touches[0];
-      if (!touch || touch.clientX > edgeThreshold) {
+      if (!touch || touch.clientX <= ANDROID_BACK_MARGIN || touch.clientX > edgeThreshold || sessionsSheetOpenRef.current) {
         touchStart.active = false;
+  
         return;
       }
 
@@ -266,14 +437,19 @@ const MobileShell: React.FC = () => {
       const deltaY = touch.clientY - touchStart.y;
       const hasHorizontalIntent = deltaX > 10 && Math.abs(deltaX) > Math.abs(deltaY) * horizontalIntentRatio;
 
+      if (edgeTouchRef.current.active && !edgeTouchRef.current.decided) {
+        edgeScrollDecideRef.current(deltaY, deltaX);
+      }
+
       if (!touchStart.dragging) {
         if (!hasHorizontalIntent) return;
         touchStart.dragging = true;
+        beginTransition();
         setSessionsSheetOpen(true);
       }
 
       event.preventDefault();
-      setSessionsSheetDragX(Math.min(0, -window.innerWidth + Math.max(0, deltaX)));
+      setSessionsSheetDragX(Math.min(0, -sessionsDrawerWidth + Math.max(0, deltaX)));
     };
 
     const finishSwipe = (event?: TouchEvent) => {
@@ -285,6 +461,8 @@ const MobileShell: React.FC = () => {
       const touch = event?.changedTouches[0];
       if (!touch || !wasDragging) {
         setSessionsSheetDragX(null);
+  
+        endTransition();
         return;
       }
 
@@ -298,6 +476,8 @@ const MobileShell: React.FC = () => {
         setSessionsSheetOpen(false);
         setSessionsSheetDragX(null);
       }
+
+      endTransition();
     };
 
     const handleTouchCancel = () => {
@@ -315,7 +495,7 @@ const MobileShell: React.FC = () => {
       document.removeEventListener('touchend', finishSwipe, { capture: true });
       document.removeEventListener('touchcancel', handleTouchCancel, { capture: true });
     };
-  }, [changesOpen, filesOpen, overflowOpen, settingsOpen]);
+  }, [beginTransition, endTransition, changesOpen, filesOpen, overflowOpen, sessionsDrawerWidth, settingsOpen]);
 
   const overflowItems: OverflowItem[] = React.useMemo(
     () => [
@@ -348,15 +528,40 @@ const MobileShell: React.FC = () => {
         className="main-content-safe-area flex h-[100dvh] flex-col bg-background text-foreground"
         data-page-scroll-lock="true"
       >
-        <MobileHeader
-          onOpenSessions={() => setSessionsSheetOpen(true)}
-          onOpenMenu={() => setOverflowOpen(true)}
-        />
-        <main className="relative min-h-0 flex-1 overflow-hidden" data-page-scroll-lock="true">
-          <ErrorBoundary>
-            <ChatView />
-          </ErrorBoundary>
-        </main>
+        <div
+          className={cn(
+            'relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background',
+            sessionsSheetOpen ? 'z-[60]' : 'z-10',
+          )}
+          style={{
+            willChange: isTransitioning ? 'transform' : undefined,
+            transform: `translateX(${chatCardProgress * chatCardOffset}px) scale(${1 - chatCardProgress * 0.025})`,
+            borderRadius: chatCardProgress > 0 ? `${chatCardProgress * 18}px` : undefined,
+            boxShadow: chatCardProgress > 0
+              ? `0 18px 60px rgb(0 0 0 / ${0.12 + chatCardProgress * 0.18})`
+              : undefined,
+            transition: sessionsSheetDragX === null
+              ? 'transform 220ms cubic-bezier(0.22, 1, 0.36, 1), border-radius 220ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 220ms ease-out'
+              : 'none',
+          }}
+          onTouchStart={handleChatCardTouchStart}
+          onTouchMove={handleChatCardTouchMove}
+          onTouchEnd={handleChatCardTouchEnd}
+          onTouchCancel={handleChatCardTouchEnd}
+        >
+          <MobileHeader
+            onOpenSessions={() => setSessionsSheetOpen(true)}
+            onOpenMenu={() => setOverflowOpen(true)}
+          />
+          <main
+            className="relative min-h-0 flex-1 overflow-hidden"
+            data-page-scroll-lock="true"
+          >
+            <ErrorBoundary>
+              <ChatView />
+            </ErrorBoundary>
+          </main>
+        </div>
 
         <MobileOverflowMenu
           open={overflowOpen}
@@ -371,7 +576,12 @@ const MobileShell: React.FC = () => {
               setSessionsSheetOpen(open);
               if (!open) setSessionsSheetDragX(null);
             }}
-            dragOffsetX={sessionsSheetDragX}
+            revealProgress={sessionsDrawerProgress}
+            panelOffsetX={sessionsPanelOffset}
+            isTransitioning={isTransitioning}
+            onPanelTouchStart={handleChatCardTouchStart}
+            onPanelTouchMove={handleChatCardTouchMove}
+            onPanelTouchEnd={handleChatCardTouchEnd}
           />
         ) : null}
 

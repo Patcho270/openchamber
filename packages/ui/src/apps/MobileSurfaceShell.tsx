@@ -42,7 +42,7 @@ export type MobileSurfaceShellProps = {
   /** If true, render only the drag handle and let the child render its own header. */
   headerless?: boolean;
   presentation?: 'bottom-sheet' | 'left-drawer';
-  dragOffsetX?: number | null;
+  leftDrawerOffsetX?: number;
   ariaLabel?: string;
   children: React.ReactNode;
 };
@@ -57,7 +57,7 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
   disableSwipeDismiss = false,
   headerless = false,
   presentation = 'bottom-sheet',
-  dragOffsetX = null,
+  leftDrawerOffsetX = 0,
   ariaLabel,
   children,
 }) => {
@@ -67,9 +67,7 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
   const [entered, setEntered] = React.useState(false);
   const [contentReady, setContentReady] = React.useState(false);
   const [dragOffset, setDragOffset] = React.useState(0);
-  const [leftDrawerDragOffset, setLeftDrawerDragOffset] = React.useState<number | null>(null);
   const dragStartYRef = React.useRef<number | null>(null);
-  const dragStartXRef = React.useRef<number | null>(null);
   const isDraggingRef = React.useRef(false);
   const surfaceRef = React.useRef<HTMLElement | null>(null);
   const previousFocusRef = React.useRef<HTMLElement | null>(null);
@@ -158,24 +156,16 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
   }, [onClose, open]);
 
   const handleDragStart = (event: React.TouchEvent<HTMLDivElement>) => {
-    if (disableSwipeDismiss) return;
     if (presentation === 'left-drawer') {
-      dragStartXRef.current = event.touches[0]?.clientX ?? null;
-      isDraggingRef.current = true;
       return;
     }
+    if (disableSwipeDismiss) return;
     dragStartYRef.current = event.touches[0]?.clientY ?? null;
     isDraggingRef.current = true;
   };
 
   const handleDragMove = (event: React.TouchEvent<HTMLDivElement>) => {
-    if (presentation === 'left-drawer') {
-      if (!isDraggingRef.current || dragStartXRef.current == null) return;
-      const currentX = event.touches[0]?.clientX ?? dragStartXRef.current;
-      const delta = currentX - dragStartXRef.current;
-      setLeftDrawerDragOffset(delta < 0 ? delta : 0);
-      return;
-    }
+    if (presentation === 'left-drawer') return;
     if (!isDraggingRef.current || dragStartYRef.current == null) return;
     const currentY = event.touches[0]?.clientY ?? dragStartYRef.current;
     const delta = currentY - dragStartYRef.current;
@@ -184,17 +174,7 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
 
   const handleDragEnd = () => {
     if (!isDraggingRef.current) return;
-    if (presentation === 'left-drawer') {
-      isDraggingRef.current = false;
-      dragStartXRef.current = null;
-      if ((leftDrawerDragOffset ?? 0) <= -DISMISS_THRESHOLD_PX) {
-        setLeftDrawerDragOffset(null);
-        onClose();
-      } else {
-        setLeftDrawerDragOffset(null);
-      }
-      return;
-    }
+    if (presentation === 'left-drawer') return;
     isDraggingRef.current = false;
     dragStartYRef.current = null;
     if (dragOffset >= DISMISS_THRESHOLD_PX) {
@@ -233,13 +213,9 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
   // compositing layer — that layer is clipped to the safe-area viewport on iOS,
   // leaving a scrim gap below it over the home-indicator inset.
   const visualTransform = presentation === 'left-drawer'
-    ? dragOffsetX !== null
-      ? `translateX(${dragOffsetX}px)`
-      : leftDrawerDragOffset !== null
-        ? `translateX(${leftDrawerDragOffset}px)`
-        : !entered
-        ? 'translateX(-100%)'
-        : 'none'
+    ? leftDrawerOffsetX === 0
+      ? 'none'
+      : `translateX(${leftDrawerOffsetX}px)`
     : !entered
       ? `translateY(${ENTER_OFFSET_PX}px)`
       : dragOffset > 0
@@ -249,8 +225,9 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
   return createPortal(
     <div
       className={cn(
-        'fixed inset-0 z-50 flex bg-[rgb(0_0_0_/_0.45)]',
+        'fixed inset-0 z-50 flex',
         presentation === 'left-drawer' ? 'flex-row' : 'flex-col',
+        presentation === 'left-drawer' ? 'bg-transparent' : 'bg-[rgb(0_0_0_/_0.45)]',
         // The opacity transition keeps the scrim on its own compositing layer,
         // which iOS Safari clips to the viewport — without it, a static scrim
         // bleeds the dim into the bottom toolbar overscroll zone. Quick fade so
@@ -269,7 +246,7 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
         className={cn(
           'flex min-h-0 flex-col overflow-hidden bg-background text-foreground',
           presentation === 'left-drawer'
-            ? 'h-full w-[min(88vw,420px)] rounded-r-[20px] border-r border-border/40'
+            ? 'h-full w-full shadow-[12px_0_40px_rgb(0_0_0_/_0.16)]'
             : 'mt-auto w-full rounded-t-[20px] border-t border-border/40',
         )}
         tabIndex={-1}
@@ -280,18 +257,15 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
             setContentReady(true);
           }
         }}
-        onTouchStart={presentation === 'left-drawer' ? handleDragStart : undefined}
-        onTouchMove={presentation === 'left-drawer' ? handleDragMove : undefined}
-        onTouchEnd={presentation === 'left-drawer' ? handleDragEnd : undefined}
-        onTouchCancel={presentation === 'left-drawer' ? handleDragEnd : undefined}
         style={{
           // Sized to leave the top safe area (plus a small gap) uncovered so the
           // scrim dims it and the sheet sits a few px below the very top.
           height: presentation === 'left-drawer'
             ? '100%'
             : `calc(100% - var(--oc-safe-area-top, 0px) - ${TOP_GAP_PX}px)`,
+          willChange: presentation === 'left-drawer' && leftDrawerOffsetX !== 0 ? 'transform' : undefined,
           transform: visualTransform,
-          transition: isDraggingRef.current || dragOffsetX !== null || leftDrawerDragOffset !== null
+          transition: isDraggingRef.current || leftDrawerOffsetX !== 0
             ? 'none'
             : `transform ${ENTER_DURATION_MS}ms cubic-bezier(0.32, 0.72, 0, 1)`,
         }}

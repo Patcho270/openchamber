@@ -60,7 +60,12 @@ import { MobileSurfaceShell } from './MobileSurfaceShell';
 type MobileSessionsSheetProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  dragOffsetX?: number | null;
+  revealProgress?: number;
+  panelOffsetX?: number;
+  isTransitioning?: boolean;
+  onPanelTouchStart?: React.TouchEventHandler<HTMLDivElement>;
+  onPanelTouchMove?: React.TouchEventHandler<HTMLDivElement>;
+  onPanelTouchEnd?: React.TouchEventHandler<HTMLDivElement>;
 };
 
 type ProjectMeta = {
@@ -498,7 +503,16 @@ const SortableProjectRow: React.FC<{
   );
 };
 
-export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, onOpenChange, dragOffsetX = null }) => {
+export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({
+  open,
+  onOpenChange,
+  revealProgress = open ? 1 : 0,
+  panelOffsetX = 0,
+  isTransitioning = false,
+  onPanelTouchStart,
+  onPanelTouchMove,
+  onPanelTouchEnd,
+}) => {
   const { t } = useI18n();
   const { git } = useRuntimeAPIs();
   const liveSessions = useAllLiveSessions();
@@ -1003,9 +1017,23 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       title={t('mobile.sessions.sheet.title')}
       trailing={trailingActions}
       presentation="left-drawer"
-      dragOffsetX={dragOffsetX}
+      leftDrawerOffsetX={panelOffsetX}
     >
-      <div className="flex h-full flex-col">
+      <div
+        className="flex h-full flex-col"
+        onTouchStart={onPanelTouchStart}
+        onTouchMove={onPanelTouchMove}
+        onTouchEnd={onPanelTouchEnd}
+        onTouchCancel={onPanelTouchEnd}
+        style={{
+          willChange: isTransitioning ? 'transform, opacity' : undefined,
+          transform: `translateX(${(revealProgress - 1) * 72}px)`,
+          opacity: 0.64 + revealProgress * 0.36,
+          transition: revealProgress === 1
+            ? 'transform 220ms cubic-bezier(0.22, 1, 0.36, 1), opacity 180ms ease-out'
+            : 'none',
+        }}
+      >
         <div className={cn('shrink-0 px-4 pb-2 pt-1', editingOrder && 'hidden')}>
           <div className="relative">
             <RiSearchLine className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -1029,7 +1057,9 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
           </div>
         </div>
 
-        <ScrollShadow className="min-h-0 flex-1 overflow-y-auto pb-4">
+        <ScrollShadow
+          className="min-h-0 flex-1 overflow-y-auto pb-4"
+        >
           {projectsMeta.length === 0 ? (
             <MobileSessionsEmpty
               title={t('mobile.sessions.empty.noProjectsTitle')}
