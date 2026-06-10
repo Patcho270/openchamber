@@ -1,0 +1,990 @@
+From b39f13d5beefed7f1bbd017827ace9fde66da2cd Mon Sep 17 00:00:00 2001
+From: Hya <hyacinthe@Mac-mini-de-Hya.local>
+Date: Wed, 10 Jun 2026 01:04:10 +0200
+Subject: [PATCH 1/2] feat: add mobile sessions swipe drawer
+
+---
+ packages/ui/src/apps/MobileApp.tsx            | 91 +++++++++++++++++-
+ packages/ui/src/apps/MobileSessionsSheet.tsx  |  5 +-
+ packages/ui/src/apps/MobileSurfaceShell.tsx   | 93 +++++++++++++++----
+ .../ui/src/components/layout/MainLayout.tsx   | 79 ++++++++++++++++
+ 4 files changed, 247 insertions(+), 21 deletions(-)
+
+diff --git a/packages/ui/src/apps/MobileApp.tsx b/packages/ui/src/apps/MobileApp.tsx
+index 594703e9..93a3b2af 100644
+--- a/packages/ui/src/apps/MobileApp.tsx
++++ b/packages/ui/src/apps/MobileApp.tsx
+@@ -208,6 +208,7 @@ const MobileHeader: React.FC<{
+ const MobileShell: React.FC = () => {
+   const { t } = useI18n();
+   const [sessionsSheetOpen, setSessionsSheetOpen] = React.useState(false);
++  const [sessionsSheetDragX, setSessionsSheetDragX] = React.useState<number | null>(null);
+   const [filesOpen, setFilesOpen] = React.useState(false);
+   const [changesOpen, setChangesOpen] = React.useState(false);
+   const [settingsOpen, setSettingsOpen] = React.useState(false);
+@@ -235,6 +236,87 @@ const MobileShell: React.FC = () => {
+     setPendingChangesDiff(null);
+   }, []);
+ 
++  React.useEffect(() => {
++    if (filesOpen || changesOpen || settingsOpen || overflowOpen) return;
++
++    const edgeThreshold = window.innerWidth * 0.85;
++    const minSwipeDistance = 56;
++    const horizontalIntentRatio = 1.25;
++    const touchStart = { x: 0, y: 0, active: false, dragging: false };
++
++    const handleTouchStart = (event: TouchEvent) => {
++      const touch = event.touches[0];
++      if (!touch || touch.clientX > edgeThreshold) {
++        touchStart.active = false;
++        return;
++      }
++
++      touchStart.x = touch.clientX;
++      touchStart.y = touch.clientY;
++      touchStart.active = true;
++      touchStart.dragging = false;
++    };
++
++    const handleTouchMove = (event: TouchEvent) => {
++      if (!touchStart.active) return;
++      const touch = event.touches[0];
++      if (!touch) return;
++
++      const deltaX = touch.clientX - touchStart.x;
++      const deltaY = touch.clientY - touchStart.y;
++      const hasHorizontalIntent = deltaX > 10 && Math.abs(deltaX) > Math.abs(deltaY) * horizontalIntentRatio;
++
++      if (!touchStart.dragging) {
++        if (!hasHorizontalIntent) return;
++        touchStart.dragging = true;
++        setSessionsSheetOpen(true);
++      }
++
++      event.preventDefault();
++      setSessionsSheetDragX(Math.min(0, -window.innerWidth + Math.max(0, deltaX)));
++    };
++
++    const finishSwipe = (event?: TouchEvent) => {
++      if (!touchStart.active) return;
++      const wasDragging = touchStart.dragging;
++      touchStart.active = false;
++      touchStart.dragging = false;
++
++      const touch = event?.changedTouches[0];
++      if (!touch || !wasDragging) {
++        setSessionsSheetDragX(null);
++        return;
++      }
++
++      const deltaX = touch.clientX - touchStart.x;
++      const deltaY = touch.clientY - touchStart.y;
++      const shouldOpen = deltaX >= minSwipeDistance && Math.abs(deltaX) > Math.abs(deltaY) * horizontalIntentRatio;
++
++      if (shouldOpen) {
++        setSessionsSheetDragX(null);
++      } else {
++        setSessionsSheetOpen(false);
++        setSessionsSheetDragX(null);
++      }
++    };
++
++    const handleTouchCancel = () => {
++      finishSwipe();
++    };
++
++    document.addEventListener('touchstart', handleTouchStart, { passive: true, capture: true });
++    document.addEventListener('touchmove', handleTouchMove, { passive: false, capture: true });
++    document.addEventListener('touchend', finishSwipe, { passive: true, capture: true });
++    document.addEventListener('touchcancel', handleTouchCancel, { passive: true, capture: true });
++
++    return () => {
++      document.removeEventListener('touchstart', handleTouchStart, { capture: true });
++      document.removeEventListener('touchmove', handleTouchMove, { capture: true });
++      document.removeEventListener('touchend', finishSwipe, { capture: true });
++      document.removeEventListener('touchcancel', handleTouchCancel, { capture: true });
++    };
++  }, [changesOpen, filesOpen, overflowOpen, settingsOpen]);
++
+   const overflowItems: OverflowItem[] = React.useMemo(
+     () => [
+       {
+@@ -283,7 +365,14 @@ const MobileShell: React.FC = () => {
+         />
+ 
+         {sessionsSheetOpen ? (
+-          <MobileSessionsSheet open={sessionsSheetOpen} onOpenChange={setSessionsSheetOpen} />
++          <MobileSessionsSheet
++            open={sessionsSheetOpen}
++            onOpenChange={(open) => {
++              setSessionsSheetOpen(open);
++              if (!open) setSessionsSheetDragX(null);
++            }}
++            dragOffsetX={sessionsSheetDragX}
++          />
+         ) : null}
+ 
+         {/* Mounted only while open (like the sessions sheet) so each surface
+diff --git a/packages/ui/src/apps/MobileSessionsSheet.tsx b/packages/ui/src/apps/MobileSessionsSheet.tsx
+index 736f6500..ff545a30 100644
+--- a/packages/ui/src/apps/MobileSessionsSheet.tsx
++++ b/packages/ui/src/apps/MobileSessionsSheet.tsx
+@@ -60,6 +60,7 @@ import { MobileSurfaceShell } from './MobileSurfaceShell';
+ type MobileSessionsSheetProps = {
+   open: boolean;
+   onOpenChange: (open: boolean) => void;
++  dragOffsetX?: number | null;
+ };
+ 
+ type ProjectMeta = {
+@@ -497,7 +498,7 @@ const SortableProjectRow: React.FC<{
+   );
+ };
+ 
+-export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, onOpenChange }) => {
++export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, onOpenChange, dragOffsetX = null }) => {
+   const { t } = useI18n();
+   const { git } = useRuntimeAPIs();
+   const liveSessions = useAllLiveSessions();
+@@ -1001,6 +1002,8 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open,
+       ariaLabel={t('mobile.sessions.sheet.title')}
+       title={t('mobile.sessions.sheet.title')}
+       trailing={trailingActions}
++      presentation="left-drawer"
++      dragOffsetX={dragOffsetX}
+     >
+       <div className="flex h-full flex-col">
+         <div className={cn('shrink-0 px-4 pb-2 pt-1', editingOrder && 'hidden')}>
+diff --git a/packages/ui/src/apps/MobileSurfaceShell.tsx b/packages/ui/src/apps/MobileSurfaceShell.tsx
+index 5ba246e5..95e4c577 100644
+--- a/packages/ui/src/apps/MobileSurfaceShell.tsx
++++ b/packages/ui/src/apps/MobileSurfaceShell.tsx
+@@ -41,6 +41,8 @@ export type MobileSurfaceShellProps = {
+   disableSwipeDismiss?: boolean;
+   /** If true, render only the drag handle and let the child render its own header. */
+   headerless?: boolean;
++  presentation?: 'bottom-sheet' | 'left-drawer';
++  dragOffsetX?: number | null;
+   ariaLabel?: string;
+   children: React.ReactNode;
+ };
+@@ -54,6 +56,8 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
+   onBack,
+   disableSwipeDismiss = false,
+   headerless = false,
++  presentation = 'bottom-sheet',
++  dragOffsetX = null,
+   ariaLabel,
+   children,
+ }) => {
+@@ -63,7 +67,9 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
+   const [entered, setEntered] = React.useState(false);
+   const [contentReady, setContentReady] = React.useState(false);
+   const [dragOffset, setDragOffset] = React.useState(0);
++  const [leftDrawerDragOffset, setLeftDrawerDragOffset] = React.useState<number | null>(null);
+   const dragStartYRef = React.useRef<number | null>(null);
++  const dragStartXRef = React.useRef<number | null>(null);
+   const isDraggingRef = React.useRef(false);
+   const surfaceRef = React.useRef<HTMLElement | null>(null);
+   const previousFocusRef = React.useRef<HTMLElement | null>(null);
+@@ -92,9 +98,13 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
+       setContentReady(false);
+       return;
+     }
++    if (presentation === 'left-drawer') {
++      setContentReady(true);
++      return;
++    }
+     const id = window.setTimeout(() => setContentReady(true), ENTER_DELAY_MS + ENTER_DURATION_MS + 80);
+     return () => window.clearTimeout(id);
+-  }, [open]);
++  }, [open, presentation]);
+ 
+   React.useEffect(() => {
+     if (!open) return;
+@@ -149,11 +159,23 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
+ 
+   const handleDragStart = (event: React.TouchEvent<HTMLDivElement>) => {
+     if (disableSwipeDismiss) return;
++    if (presentation === 'left-drawer') {
++      dragStartXRef.current = event.touches[0]?.clientX ?? null;
++      isDraggingRef.current = true;
++      return;
++    }
+     dragStartYRef.current = event.touches[0]?.clientY ?? null;
+     isDraggingRef.current = true;
+   };
+ 
+   const handleDragMove = (event: React.TouchEvent<HTMLDivElement>) => {
++    if (presentation === 'left-drawer') {
++      if (!isDraggingRef.current || dragStartXRef.current == null) return;
++      const currentX = event.touches[0]?.clientX ?? dragStartXRef.current;
++      const delta = currentX - dragStartXRef.current;
++      setLeftDrawerDragOffset(delta < 0 ? delta : 0);
++      return;
++    }
+     if (!isDraggingRef.current || dragStartYRef.current == null) return;
+     const currentY = event.touches[0]?.clientY ?? dragStartYRef.current;
+     const delta = currentY - dragStartYRef.current;
+@@ -162,6 +184,17 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
+ 
+   const handleDragEnd = () => {
+     if (!isDraggingRef.current) return;
++    if (presentation === 'left-drawer') {
++      isDraggingRef.current = false;
++      dragStartXRef.current = null;
++      if ((leftDrawerDragOffset ?? 0) <= -DISMISS_THRESHOLD_PX) {
++        setLeftDrawerDragOffset(null);
++        onClose();
++      } else {
++        setLeftDrawerDragOffset(null);
++      }
++      return;
++    }
+     isDraggingRef.current = false;
+     dragStartYRef.current = null;
+     if (dragOffset >= DISMISS_THRESHOLD_PX) {
+@@ -199,16 +232,25 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
+   // When settled, use `none` (not translateY(0)) so the sheet isn't kept on a
+   // compositing layer — that layer is clipped to the safe-area viewport on iOS,
+   // leaving a scrim gap below it over the home-indicator inset.
+-  const visualTransform = !entered
+-    ? `translateY(${ENTER_OFFSET_PX}px)`
+-    : dragOffset > 0
+-      ? `translateY(${dragOffset}px)`
+-      : 'none';
++  const visualTransform = presentation === 'left-drawer'
++    ? dragOffsetX !== null
++      ? `translateX(${dragOffsetX}px)`
++      : leftDrawerDragOffset !== null
++        ? `translateX(${leftDrawerDragOffset}px)`
++        : !entered
++        ? 'translateX(-100%)'
++        : 'none'
++    : !entered
++      ? `translateY(${ENTER_OFFSET_PX}px)`
++      : dragOffset > 0
++        ? `translateY(${dragOffset}px)`
++        : 'none';
+ 
+   return createPortal(
+     <div
+       className={cn(
+-        'fixed inset-0 z-50 flex flex-col bg-[rgb(0_0_0_/_0.45)]',
++        'fixed inset-0 z-50 flex bg-[rgb(0_0_0_/_0.45)]',
++        presentation === 'left-drawer' ? 'flex-row' : 'flex-col',
+         // The opacity transition keeps the scrim on its own compositing layer,
+         // which iOS Safari clips to the viewport — without it, a static scrim
+         // bleeds the dim into the bottom toolbar overscroll zone. Quick fade so
+@@ -224,7 +266,12 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
+       {/* Sheet is a normal flex child — mirroring MobileOverlayPanel. */}
+       <section
+         ref={surfaceRef}
+-        className="mt-auto flex min-h-0 w-full flex-col overflow-hidden rounded-t-[20px] border-t border-border/40 bg-background text-foreground"
++        className={cn(
++          'flex min-h-0 flex-col overflow-hidden bg-background text-foreground',
++          presentation === 'left-drawer'
++            ? 'h-full w-[min(88vw,420px)] rounded-r-[20px] border-r border-border/40'
++            : 'mt-auto w-full rounded-t-[20px] border-t border-border/40',
++        )}
+         tabIndex={-1}
+         onClick={(event) => event.stopPropagation()}
+         onTransitionEnd={(event) => {
+@@ -233,26 +280,34 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
+             setContentReady(true);
+           }
+         }}
++        onTouchStart={presentation === 'left-drawer' ? handleDragStart : undefined}
++        onTouchMove={presentation === 'left-drawer' ? handleDragMove : undefined}
++        onTouchEnd={presentation === 'left-drawer' ? handleDragEnd : undefined}
++        onTouchCancel={presentation === 'left-drawer' ? handleDragEnd : undefined}
+         style={{
+           // Sized to leave the top safe area (plus a small gap) uncovered so the
+           // scrim dims it and the sheet sits a few px below the very top.
+-          height: `calc(100% - var(--oc-safe-area-top, 0px) - ${TOP_GAP_PX}px)`,
++          height: presentation === 'left-drawer'
++            ? '100%'
++            : `calc(100% - var(--oc-safe-area-top, 0px) - ${TOP_GAP_PX}px)`,
+           transform: visualTransform,
+-          transition: isDraggingRef.current
++          transition: isDraggingRef.current || dragOffsetX !== null || leftDrawerDragOffset !== null
+             ? 'none'
+             : `transform ${ENTER_DURATION_MS}ms cubic-bezier(0.32, 0.72, 0, 1)`,
+         }}
+       >
+-        <div
+-          className="shrink-0 select-none"
+-          onTouchStart={handleDragStart}
+-          onTouchMove={handleDragMove}
+-          onTouchEnd={handleDragEnd}
+-          onTouchCancel={handleDragEnd}
++          <div
++            className="shrink-0 select-none"
++          onTouchStart={presentation === 'bottom-sheet' ? handleDragStart : undefined}
++          onTouchMove={presentation === 'bottom-sheet' ? handleDragMove : undefined}
++          onTouchEnd={presentation === 'bottom-sheet' ? handleDragEnd : undefined}
++          onTouchCancel={presentation === 'bottom-sheet' ? handleDragEnd : undefined}
+         >
+-          <div className="flex items-center justify-center pt-2 pb-1">
+-            <span className="h-1 w-10 rounded-full bg-[var(--surface-muted)]" aria-hidden />
+-          </div>
++          {presentation === 'bottom-sheet' ? (
++            <div className="flex items-center justify-center pt-2 pb-1">
++              <span className="h-1 w-10 rounded-full bg-[var(--surface-muted)]" aria-hidden />
++            </div>
++          ) : null}
+           {!headerless ? (
+             <header className="flex h-[var(--oc-header-height,56px)] items-center gap-2 px-3">
+               {leading}
+diff --git a/packages/ui/src/components/layout/MainLayout.tsx b/packages/ui/src/components/layout/MainLayout.tsx
+index 2f84da12..c68e323e 100644
+--- a/packages/ui/src/components/layout/MainLayout.tsx
++++ b/packages/ui/src/components/layout/MainLayout.tsx
+@@ -77,6 +77,7 @@ export const MainLayout: React.FC = () => {
+     }, []);
+     const mobileRightDrawerOpenRef = React.useRef(false);
+     const initialDrawerWidthRef = React.useRef(typeof window === 'undefined' ? 0 : window.innerWidth);
++    const leftSwipeStartRef = React.useRef<{ x: number; y: number; dragging: boolean } | null>(null);
+ 
+     // Left drawer motion value
+     const leftDrawerX = useMotionValue(-initialDrawerWidthRef.current);
+@@ -154,6 +155,84 @@ export const MainLayout: React.FC = () => {
+         }
+     }, [isSessionSwitcherOpen, isMobile, mobileLeftDrawerOpen, setMobileSessionPanelOpen]);
+ 
++    useEffect(() => {
++        if (!isMobile || mobileLeftDrawerOpen || mobileRightSidebarOpen || isSettingsDialogOpen) {
++            leftSwipeStartRef.current = null;
++            return;
++        }
++
++        const minSwipeDistance = 56;
++        const horizontalIntentRatio = 1.25;
++
++        const handleTouchStart = (event: TouchEvent) => {
++            const touch = event.touches[0];
++            if (!touch || touch.clientX > window.innerWidth * 0.85) {
++                leftSwipeStartRef.current = null;
++                return;
++            }
++
++            leftSwipeStartRef.current = { x: touch.clientX, y: touch.clientY, dragging: false };
++        };
++
++        const handleTouchMove = (event: TouchEvent) => {
++            const start = leftSwipeStartRef.current;
++            const touch = event.touches[0];
++            if (!start || !touch) return;
++
++            const deltaX = touch.clientX - start.x;
++            const deltaY = touch.clientY - start.y;
++            const hasHorizontalIntent = deltaX > 10 && Math.abs(deltaX) > Math.abs(deltaY) * horizontalIntentRatio;
++
++            if (!start.dragging) {
++                if (!hasHorizontalIntent) return;
++                start.dragging = true;
++                setMobileLeftDrawerVisible(true);
++            }
++
++            event.preventDefault();
++            const width = leftDrawerWidth.current || window.innerWidth;
++            leftDrawerX.set(Math.min(0, -width + Math.max(0, deltaX)));
++        };
++
++        const finishSwipe = (event?: TouchEvent) => {
++            const start = leftSwipeStartRef.current;
++            if (!start) return;
++            leftSwipeStartRef.current = null;
++
++            const touch = event?.changedTouches[0];
++            const deltaX = touch ? touch.clientX - start.x : 0;
++            const width = leftDrawerWidth.current || window.innerWidth;
++            const currentX = leftDrawerX.get();
++            const progress = 1 + currentX / width;
++            const shouldOpen = start.dragging && (deltaX >= minSwipeDistance || progress > 0.28);
++
++            animate(leftDrawerX, shouldOpen ? 0 : -width, {
++                type: 'spring',
++                stiffness: 400,
++                damping: 35,
++                mass: 0.8,
++            });
++
++            if (shouldOpen) {
++                setMobileSessionPanelOpen(true);
++            } else {
++                setMobileLeftDrawerVisible(false);
++            }
++        };
++
++        document.addEventListener('touchstart', handleTouchStart, { passive: true, capture: true });
++        document.addEventListener('touchmove', handleTouchMove, { passive: false, capture: true });
++        document.addEventListener('touchend', finishSwipe, { passive: true, capture: true });
++        document.addEventListener('touchcancel', finishSwipe, { passive: true, capture: true });
++
++        return () => {
++            document.removeEventListener('touchstart', handleTouchStart, { capture: true });
++            document.removeEventListener('touchmove', handleTouchMove, { capture: true });
++            document.removeEventListener('touchend', finishSwipe, { capture: true });
++            document.removeEventListener('touchcancel', finishSwipe, { capture: true });
++        };
++    }, [isMobile, isSettingsDialogOpen, leftDrawerWidth, leftDrawerX, mobileLeftDrawerOpen, mobileRightSidebarOpen, setMobileSessionPanelOpen]);
++
+     useEffect(() => {
+         if (!isMobile) {
+             mobilePanelsResetRef.current = false;
+-- 
+2.50.1 (Apple Git-155)
+
+
+From 32515634f13a2206efa8629a4b1bcbeeeec8bd14 Mon Sep 17 00:00:00 2001
+From: Hya <hyacinthe@Mac-mini-de-Hya.local>
+Date: Wed, 10 Jun 2026 13:25:44 +0200
+Subject: [PATCH 2/2] feat: mobile sessions swipe drawer with full-screen panel
+
+- Sessions panel full-screen on mobile with parallax content sweep
+- Chat card slides right on open, stays in place on close
+- Swipe-to-close from chat card area
+- Left edge swipe to open drawer
+- Scroll lock during transitions (body fixed + overflow hidden)
+- Android back gesture margin (20px)
+- Will-change hints for 120fps animations
+- Desktop surface: ?surface=desktop query param
+---
+ packages/ui/src/apps/MobileApp.tsx           | 236 ++++++++++++++++++-
+ packages/ui/src/apps/MobileSessionsSheet.tsx |  40 +++-
+ packages/ui/src/apps/MobileSurfaceShell.tsx  |  52 +---
+ 3 files changed, 271 insertions(+), 57 deletions(-)
+
+diff --git a/packages/ui/src/apps/MobileApp.tsx b/packages/ui/src/apps/MobileApp.tsx
+index 93a3b2af..094c8ebd 100644
+--- a/packages/ui/src/apps/MobileApp.tsx
++++ b/packages/ui/src/apps/MobileApp.tsx
+@@ -213,11 +213,123 @@ const MobileShell: React.FC = () => {
+   const [changesOpen, setChangesOpen] = React.useState(false);
+   const [settingsOpen, setSettingsOpen] = React.useState(false);
+   const [overflowOpen, setOverflowOpen] = React.useState(false);
++  const sessionsCloseSwipeRef = React.useRef({ x: 0, y: 0, active: false, dragging: false });
++  const [isTransitioning, setIsTransitioning] = React.useState(false);
++  const isTransitioningRef = React.useRef(false);
++  const transitionTimerRef = React.useRef<number | null>(null);
++  const edgeTouchRef = React.useRef({ active: false, decided: false });
++  const sessionsSheetOpenRef = React.useRef(false);
++  const savedScrollRef = React.useRef(0);
++  const edgeScrollDecideRef = React.useRef<(deltaY: number, deltaX: number) => void>(() => {});
++
++  React.useEffect(() => {
++    sessionsSheetOpenRef.current = sessionsSheetOpen;
++  }, [sessionsSheetOpen]);
++
++  React.useEffect(() => {
++    const ANDROID_BACK_MARGIN = 20;
++
++    const onTouchStart = (e: TouchEvent) => {
++      const touch = e.touches[0];
++      if (!touch) return;
++      if (touch.clientX <= ANDROID_BACK_MARGIN) {
++        edgeTouchRef.current = { active: false, decided: false };
++        return;
++      }
++      if (touch.clientX <= window.innerWidth * 0.15) {
++        edgeTouchRef.current = { active: true, decided: false };
++      }
++    };
++
++    const onTouchMove = (e: TouchEvent) => {
++      if (!edgeTouchRef.current.active || edgeTouchRef.current.decided) return;
++      e.preventDefault();
++    };
++
++    const onTouchEnd = () => {
++      edgeTouchRef.current = { active: false, decided: false };
++    };
++
++    const decideScroll = (deltaY: number, deltaX: number) => {
++      if (!edgeTouchRef.current.active || edgeTouchRef.current.decided) return;
++      if (Math.abs(deltaY) > 10 && Math.abs(deltaY) > Math.abs(deltaX)) {
++        edgeTouchRef.current.decided = true;
++      }
++    };
++
++    document.addEventListener('touchstart', onTouchStart, { passive: true, capture: true });
++    document.addEventListener('touchmove', onTouchMove, { passive: false, capture: true });
++    document.addEventListener('touchend', onTouchEnd, { passive: true, capture: true });
++    document.addEventListener('touchcancel', onTouchEnd, { passive: true, capture: true });
++
++    edgeScrollDecideRef.current = decideScroll;
++
++    return () => {
++      document.removeEventListener('touchstart', onTouchStart, { capture: true });
++      document.removeEventListener('touchmove', onTouchMove, { capture: true });
++      document.removeEventListener('touchend', onTouchEnd, { capture: true });
++      document.removeEventListener('touchcancel', onTouchEnd, { capture: true });
++    };
++  }, []);
++
++  const lockScroll = React.useCallback(() => {
++    savedScrollRef.current = window.scrollY;
++    document.body.style.position = 'fixed';
++    document.body.style.top = `-${savedScrollRef.current}px`;
++    document.body.style.width = '100%';
++    document.body.style.overflow = 'hidden';
++  }, []);
++
++  const unlockScroll = React.useCallback(() => {
++    document.body.style.position = '';
++    document.body.style.top = '';
++    document.body.style.width = '';
++    document.body.style.overflow = '';
++    window.scrollTo(0, savedScrollRef.current);
++  }, []);
++
++  const beginTransition = React.useCallback(() => {
++    if (transitionTimerRef.current) {
++      window.clearTimeout(transitionTimerRef.current);
++      transitionTimerRef.current = null;
++    }
++    isTransitioningRef.current = true;
++    setIsTransitioning(true);
++    lockScroll();
++  }, [lockScroll]);
++
++  const endTransition = React.useCallback(() => {
++    if (transitionTimerRef.current) window.clearTimeout(transitionTimerRef.current);
++    transitionTimerRef.current = window.setTimeout(() => {
++      isTransitioningRef.current = false;
++      setIsTransitioning(false);
++      unlockScroll();
++      transitionTimerRef.current = null;
++    }, 250);
++  }, [unlockScroll]);
++
++  React.useEffect(() => {
++    return () => {
++      if (transitionTimerRef.current) window.clearTimeout(transitionTimerRef.current);
++      isTransitioningRef.current = false;
++      unlockScroll();
++    };
++  }, [unlockScroll]);
++
+   // When set, the Changes surface opens directly into the per-file diff for this path.
+   const [pendingChangesDiff, setPendingChangesDiff] = React.useState<{ path: string; staged: boolean } | null>(null);
+   const currentDirectory = useDirectoryStore((state) => state.currentDirectory);
+   const gitStatus = useGitStatus(normalizePath(currentDirectory) || null);
+   const dirtyChangeCount = gitStatus?.files?.length ?? 0;
++  const sessionsDrawerWidth = typeof window === 'undefined' ? 390 : window.innerWidth;
++  const sessionsDrawerProgress = sessionsSheetOpen
++    ? sessionsSheetDragX === null
++      ? 1
++      : Math.max(0, Math.min(1, 1 + sessionsSheetDragX / sessionsDrawerWidth))
++    : 0;
++  const chatCardProgress = sessionsDrawerProgress;
++  const chatCardOffset = typeof window === 'undefined' ? 390 : window.innerWidth;
++  const sessionsPanelOffset = 0;
+ 
+   const mobileActions = React.useMemo<MobileAppActions>(
+     () => ({
+@@ -236,9 +348,67 @@ const MobileShell: React.FC = () => {
+     setPendingChangesDiff(null);
+   }, []);
+ 
++  const handleChatCardTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
++    if (!sessionsSheetOpen) return;
++    const touch = event.touches[0];
++    if (!touch) return;
++    sessionsCloseSwipeRef.current = { x: touch.clientX, y: touch.clientY, active: true, dragging: false };
++  };
++
++  const handleChatCardTouchMove = (event: React.TouchEvent<HTMLDivElement>) => {
++    const swipe = sessionsCloseSwipeRef.current;
++    if (!sessionsSheetOpen || !swipe.active) return;
++    const touch = event.touches[0];
++    if (!touch) return;
++
++    const deltaX = touch.clientX - swipe.x;
++    const deltaY = touch.clientY - swipe.y;
++    const hasHorizontalIntent = deltaX < -10 && Math.abs(deltaX) > Math.abs(deltaY) * 1.25;
++
++    if (edgeTouchRef.current.active && !edgeTouchRef.current.decided) {
++      edgeScrollDecideRef.current(deltaY, deltaX);
++    }
++
++    if (!swipe.dragging) {
++      if (!hasHorizontalIntent) return;
++      swipe.dragging = true;
++      beginTransition();
++
++    }
++
++    event.preventDefault();
++    setSessionsSheetDragX(Math.max(-sessionsDrawerWidth, Math.min(0, deltaX)));
++  };
++
++  const handleChatCardTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
++    const swipe = sessionsCloseSwipeRef.current;
++    sessionsCloseSwipeRef.current = { x: 0, y: 0, active: false, dragging: false };
++    if (!sessionsSheetOpen || !swipe.active) return;
++
++    const touch = event.changedTouches[0];
++    if (!touch || !swipe.dragging) {
++      setSessionsSheetDragX(null);
++
++      endTransition();
++      return;
++    }
++
++    const deltaX = touch.clientX - swipe.x;
++    const deltaY = touch.clientY - swipe.y;
++    const shouldClose = deltaX <= -56 && Math.abs(deltaX) > Math.abs(deltaY) * 1.25;
++
++    if (shouldClose) {
++      setSessionsSheetOpen(false);
++    }
++    setSessionsSheetDragX(null);
++
++    endTransition();
++  };
++
+   React.useEffect(() => {
+     if (filesOpen || changesOpen || settingsOpen || overflowOpen) return;
+ 
++    const ANDROID_BACK_MARGIN = 20;
+     const edgeThreshold = window.innerWidth * 0.85;
+     const minSwipeDistance = 56;
+     const horizontalIntentRatio = 1.25;
+@@ -246,8 +416,9 @@ const MobileShell: React.FC = () => {
+ 
+     const handleTouchStart = (event: TouchEvent) => {
+       const touch = event.touches[0];
+-      if (!touch || touch.clientX > edgeThreshold) {
++      if (!touch || touch.clientX <= ANDROID_BACK_MARGIN || touch.clientX > edgeThreshold || sessionsSheetOpenRef.current) {
+         touchStart.active = false;
++  
+         return;
+       }
+ 
+@@ -266,14 +437,19 @@ const MobileShell: React.FC = () => {
+       const deltaY = touch.clientY - touchStart.y;
+       const hasHorizontalIntent = deltaX > 10 && Math.abs(deltaX) > Math.abs(deltaY) * horizontalIntentRatio;
+ 
++      if (edgeTouchRef.current.active && !edgeTouchRef.current.decided) {
++        edgeScrollDecideRef.current(deltaY, deltaX);
++      }
++
+       if (!touchStart.dragging) {
+         if (!hasHorizontalIntent) return;
+         touchStart.dragging = true;
++        beginTransition();
+         setSessionsSheetOpen(true);
+       }
+ 
+       event.preventDefault();
+-      setSessionsSheetDragX(Math.min(0, -window.innerWidth + Math.max(0, deltaX)));
++      setSessionsSheetDragX(Math.min(0, -sessionsDrawerWidth + Math.max(0, deltaX)));
+     };
+ 
+     const finishSwipe = (event?: TouchEvent) => {
+@@ -285,6 +461,8 @@ const MobileShell: React.FC = () => {
+       const touch = event?.changedTouches[0];
+       if (!touch || !wasDragging) {
+         setSessionsSheetDragX(null);
++  
++        endTransition();
+         return;
+       }
+ 
+@@ -298,6 +476,8 @@ const MobileShell: React.FC = () => {
+         setSessionsSheetOpen(false);
+         setSessionsSheetDragX(null);
+       }
++
++      endTransition();
+     };
+ 
+     const handleTouchCancel = () => {
+@@ -315,7 +495,7 @@ const MobileShell: React.FC = () => {
+       document.removeEventListener('touchend', finishSwipe, { capture: true });
+       document.removeEventListener('touchcancel', handleTouchCancel, { capture: true });
+     };
+-  }, [changesOpen, filesOpen, overflowOpen, settingsOpen]);
++  }, [beginTransition, endTransition, changesOpen, filesOpen, overflowOpen, sessionsDrawerWidth, settingsOpen]);
+ 
+   const overflowItems: OverflowItem[] = React.useMemo(
+     () => [
+@@ -348,15 +528,40 @@ const MobileShell: React.FC = () => {
+         className="main-content-safe-area flex h-[100dvh] flex-col bg-background text-foreground"
+         data-page-scroll-lock="true"
+       >
+-        <MobileHeader
+-          onOpenSessions={() => setSessionsSheetOpen(true)}
+-          onOpenMenu={() => setOverflowOpen(true)}
+-        />
+-        <main className="relative min-h-0 flex-1 overflow-hidden" data-page-scroll-lock="true">
+-          <ErrorBoundary>
+-            <ChatView />
+-          </ErrorBoundary>
+-        </main>
++        <div
++          className={cn(
++            'relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background',
++            sessionsSheetOpen ? 'z-[60]' : 'z-10',
++          )}
++          style={{
++            willChange: isTransitioning ? 'transform' : undefined,
++            transform: `translateX(${chatCardProgress * chatCardOffset}px) scale(${1 - chatCardProgress * 0.025})`,
++            borderRadius: chatCardProgress > 0 ? `${chatCardProgress * 18}px` : undefined,
++            boxShadow: chatCardProgress > 0
++              ? `0 18px 60px rgb(0 0 0 / ${0.12 + chatCardProgress * 0.18})`
++              : undefined,
++            transition: sessionsSheetDragX === null
++              ? 'transform 220ms cubic-bezier(0.22, 1, 0.36, 1), border-radius 220ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 220ms ease-out'
++              : 'none',
++          }}
++          onTouchStart={handleChatCardTouchStart}
++          onTouchMove={handleChatCardTouchMove}
++          onTouchEnd={handleChatCardTouchEnd}
++          onTouchCancel={handleChatCardTouchEnd}
++        >
++          <MobileHeader
++            onOpenSessions={() => setSessionsSheetOpen(true)}
++            onOpenMenu={() => setOverflowOpen(true)}
++          />
++          <main
++            className="relative min-h-0 flex-1 overflow-hidden"
++            data-page-scroll-lock="true"
++          >
++            <ErrorBoundary>
++              <ChatView />
++            </ErrorBoundary>
++          </main>
++        </div>
+ 
+         <MobileOverflowMenu
+           open={overflowOpen}
+@@ -371,7 +576,12 @@ const MobileShell: React.FC = () => {
+               setSessionsSheetOpen(open);
+               if (!open) setSessionsSheetDragX(null);
+             }}
+-            dragOffsetX={sessionsSheetDragX}
++            revealProgress={sessionsDrawerProgress}
++            panelOffsetX={sessionsPanelOffset}
++            isTransitioning={isTransitioning}
++            onPanelTouchStart={handleChatCardTouchStart}
++            onPanelTouchMove={handleChatCardTouchMove}
++            onPanelTouchEnd={handleChatCardTouchEnd}
+           />
+         ) : null}
+ 
+diff --git a/packages/ui/src/apps/MobileSessionsSheet.tsx b/packages/ui/src/apps/MobileSessionsSheet.tsx
+index ff545a30..5b668a8a 100644
+--- a/packages/ui/src/apps/MobileSessionsSheet.tsx
++++ b/packages/ui/src/apps/MobileSessionsSheet.tsx
+@@ -60,7 +60,12 @@ import { MobileSurfaceShell } from './MobileSurfaceShell';
+ type MobileSessionsSheetProps = {
+   open: boolean;
+   onOpenChange: (open: boolean) => void;
+-  dragOffsetX?: number | null;
++  revealProgress?: number;
++  panelOffsetX?: number;
++  isTransitioning?: boolean;
++  onPanelTouchStart?: React.TouchEventHandler<HTMLDivElement>;
++  onPanelTouchMove?: React.TouchEventHandler<HTMLDivElement>;
++  onPanelTouchEnd?: React.TouchEventHandler<HTMLDivElement>;
+ };
+ 
+ type ProjectMeta = {
+@@ -498,7 +503,16 @@ const SortableProjectRow: React.FC<{
+   );
+ };
+ 
+-export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, onOpenChange, dragOffsetX = null }) => {
++export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({
++  open,
++  onOpenChange,
++  revealProgress = open ? 1 : 0,
++  panelOffsetX = 0,
++  isTransitioning = false,
++  onPanelTouchStart,
++  onPanelTouchMove,
++  onPanelTouchEnd,
++}) => {
+   const { t } = useI18n();
+   const { git } = useRuntimeAPIs();
+   const liveSessions = useAllLiveSessions();
+@@ -1003,9 +1017,23 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open,
+       title={t('mobile.sessions.sheet.title')}
+       trailing={trailingActions}
+       presentation="left-drawer"
+-      dragOffsetX={dragOffsetX}
++      leftDrawerOffsetX={panelOffsetX}
+     >
+-      <div className="flex h-full flex-col">
++      <div
++        className="flex h-full flex-col"
++        onTouchStart={onPanelTouchStart}
++        onTouchMove={onPanelTouchMove}
++        onTouchEnd={onPanelTouchEnd}
++        onTouchCancel={onPanelTouchEnd}
++        style={{
++          willChange: isTransitioning ? 'transform, opacity' : undefined,
++          transform: `translateX(${(revealProgress - 1) * 72}px)`,
++          opacity: 0.64 + revealProgress * 0.36,
++          transition: revealProgress === 1
++            ? 'transform 220ms cubic-bezier(0.22, 1, 0.36, 1), opacity 180ms ease-out'
++            : 'none',
++        }}
++      >
+         <div className={cn('shrink-0 px-4 pb-2 pt-1', editingOrder && 'hidden')}>
+           <div className="relative">
+             <RiSearchLine className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+@@ -1029,7 +1057,9 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open,
+           </div>
+         </div>
+ 
+-        <ScrollShadow className="min-h-0 flex-1 overflow-y-auto pb-4">
++        <ScrollShadow
++          className="min-h-0 flex-1 overflow-y-auto pb-4"
++        >
+           {projectsMeta.length === 0 ? (
+             <MobileSessionsEmpty
+               title={t('mobile.sessions.empty.noProjectsTitle')}
+diff --git a/packages/ui/src/apps/MobileSurfaceShell.tsx b/packages/ui/src/apps/MobileSurfaceShell.tsx
+index 95e4c577..02509b8f 100644
+--- a/packages/ui/src/apps/MobileSurfaceShell.tsx
++++ b/packages/ui/src/apps/MobileSurfaceShell.tsx
+@@ -42,7 +42,7 @@ export type MobileSurfaceShellProps = {
+   /** If true, render only the drag handle and let the child render its own header. */
+   headerless?: boolean;
+   presentation?: 'bottom-sheet' | 'left-drawer';
+-  dragOffsetX?: number | null;
++  leftDrawerOffsetX?: number;
+   ariaLabel?: string;
+   children: React.ReactNode;
+ };
+@@ -57,7 +57,7 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
+   disableSwipeDismiss = false,
+   headerless = false,
+   presentation = 'bottom-sheet',
+-  dragOffsetX = null,
++  leftDrawerOffsetX = 0,
+   ariaLabel,
+   children,
+ }) => {
+@@ -67,9 +67,7 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
+   const [entered, setEntered] = React.useState(false);
+   const [contentReady, setContentReady] = React.useState(false);
+   const [dragOffset, setDragOffset] = React.useState(0);
+-  const [leftDrawerDragOffset, setLeftDrawerDragOffset] = React.useState<number | null>(null);
+   const dragStartYRef = React.useRef<number | null>(null);
+-  const dragStartXRef = React.useRef<number | null>(null);
+   const isDraggingRef = React.useRef(false);
+   const surfaceRef = React.useRef<HTMLElement | null>(null);
+   const previousFocusRef = React.useRef<HTMLElement | null>(null);
+@@ -158,24 +156,16 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
+   }, [onClose, open]);
+ 
+   const handleDragStart = (event: React.TouchEvent<HTMLDivElement>) => {
+-    if (disableSwipeDismiss) return;
+     if (presentation === 'left-drawer') {
+-      dragStartXRef.current = event.touches[0]?.clientX ?? null;
+-      isDraggingRef.current = true;
+       return;
+     }
++    if (disableSwipeDismiss) return;
+     dragStartYRef.current = event.touches[0]?.clientY ?? null;
+     isDraggingRef.current = true;
+   };
+ 
+   const handleDragMove = (event: React.TouchEvent<HTMLDivElement>) => {
+-    if (presentation === 'left-drawer') {
+-      if (!isDraggingRef.current || dragStartXRef.current == null) return;
+-      const currentX = event.touches[0]?.clientX ?? dragStartXRef.current;
+-      const delta = currentX - dragStartXRef.current;
+-      setLeftDrawerDragOffset(delta < 0 ? delta : 0);
+-      return;
+-    }
++    if (presentation === 'left-drawer') return;
+     if (!isDraggingRef.current || dragStartYRef.current == null) return;
+     const currentY = event.touches[0]?.clientY ?? dragStartYRef.current;
+     const delta = currentY - dragStartYRef.current;
+@@ -184,17 +174,7 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
+ 
+   const handleDragEnd = () => {
+     if (!isDraggingRef.current) return;
+-    if (presentation === 'left-drawer') {
+-      isDraggingRef.current = false;
+-      dragStartXRef.current = null;
+-      if ((leftDrawerDragOffset ?? 0) <= -DISMISS_THRESHOLD_PX) {
+-        setLeftDrawerDragOffset(null);
+-        onClose();
+-      } else {
+-        setLeftDrawerDragOffset(null);
+-      }
+-      return;
+-    }
++    if (presentation === 'left-drawer') return;
+     isDraggingRef.current = false;
+     dragStartYRef.current = null;
+     if (dragOffset >= DISMISS_THRESHOLD_PX) {
+@@ -233,13 +213,9 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
+   // compositing layer — that layer is clipped to the safe-area viewport on iOS,
+   // leaving a scrim gap below it over the home-indicator inset.
+   const visualTransform = presentation === 'left-drawer'
+-    ? dragOffsetX !== null
+-      ? `translateX(${dragOffsetX}px)`
+-      : leftDrawerDragOffset !== null
+-        ? `translateX(${leftDrawerDragOffset}px)`
+-        : !entered
+-        ? 'translateX(-100%)'
+-        : 'none'
++    ? leftDrawerOffsetX === 0
++      ? 'none'
++      : `translateX(${leftDrawerOffsetX}px)`
+     : !entered
+       ? `translateY(${ENTER_OFFSET_PX}px)`
+       : dragOffset > 0
+@@ -249,8 +225,9 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
+   return createPortal(
+     <div
+       className={cn(
+-        'fixed inset-0 z-50 flex bg-[rgb(0_0_0_/_0.45)]',
++        'fixed inset-0 z-50 flex',
+         presentation === 'left-drawer' ? 'flex-row' : 'flex-col',
++        presentation === 'left-drawer' ? 'bg-transparent' : 'bg-[rgb(0_0_0_/_0.45)]',
+         // The opacity transition keeps the scrim on its own compositing layer,
+         // which iOS Safari clips to the viewport — without it, a static scrim
+         // bleeds the dim into the bottom toolbar overscroll zone. Quick fade so
+@@ -269,7 +246,7 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
+         className={cn(
+           'flex min-h-0 flex-col overflow-hidden bg-background text-foreground',
+           presentation === 'left-drawer'
+-            ? 'h-full w-[min(88vw,420px)] rounded-r-[20px] border-r border-border/40'
++            ? 'h-full w-full shadow-[12px_0_40px_rgb(0_0_0_/_0.16)]'
+             : 'mt-auto w-full rounded-t-[20px] border-t border-border/40',
+         )}
+         tabIndex={-1}
+@@ -280,18 +257,15 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
+             setContentReady(true);
+           }
+         }}
+-        onTouchStart={presentation === 'left-drawer' ? handleDragStart : undefined}
+-        onTouchMove={presentation === 'left-drawer' ? handleDragMove : undefined}
+-        onTouchEnd={presentation === 'left-drawer' ? handleDragEnd : undefined}
+-        onTouchCancel={presentation === 'left-drawer' ? handleDragEnd : undefined}
+         style={{
+           // Sized to leave the top safe area (plus a small gap) uncovered so the
+           // scrim dims it and the sheet sits a few px below the very top.
+           height: presentation === 'left-drawer'
+             ? '100%'
+             : `calc(100% - var(--oc-safe-area-top, 0px) - ${TOP_GAP_PX}px)`,
++          willChange: presentation === 'left-drawer' && leftDrawerOffsetX !== 0 ? 'transform' : undefined,
+           transform: visualTransform,
+-          transition: isDraggingRef.current || dragOffsetX !== null || leftDrawerDragOffset !== null
++          transition: isDraggingRef.current || leftDrawerOffsetX !== 0
+             ? 'none'
+             : `transform ${ENTER_DURATION_MS}ms cubic-bezier(0.32, 0.72, 0, 1)`,
+         }}
+-- 
+2.50.1 (Apple Git-155)
+
