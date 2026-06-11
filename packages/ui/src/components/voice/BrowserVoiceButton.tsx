@@ -350,11 +350,14 @@ export function BrowserVoiceButton() {
                             }}
                         >
                             {isActive ? (
-                                isSpeaking ? (
+                                status === 'processing' ? (
+                                    // Spinner when processing
+                                    <Icon name="loader-4" className={`${iconSizeClass} text-primary animate-spin`} />
+                                ) : isSpeaking ? (
                                     // Green speaker icon when AI is speaking
                                     <Icon name="volume-up" className={`${iconSizeClass} text-green-400 animate-pulse`} />
                                 ) : (
-                                    // Red stop icon for listening/processing (both mobile and desktop)
+                                    // Red stop icon for listening
                                     <Icon name="stop-circle" className={`${iconSizeClass} text-[var(--status-error)]`} />
                                 )
                             ) : (
